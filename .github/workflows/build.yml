@@ -5,7 +5,7 @@ on:
   push:
 
 env:
-  AOSP_TAG: android-4.4.4_r1
+  GIT_TERMINAL_PROMPT: "0"
 
 jobs:
   build:
@@ -24,12 +24,46 @@ jobs:
       - name: Fetch AOSP 4.4 sources (layout the makefile expects)
         run: |
           mkdir -p aosp/system aosp/external
-          M=https://github.com/aosp-mirror
-          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_system_core        aosp/system/core
-          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_system_extras      aosp/system/extras
-          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_external_zlib      aosp/external/zlib
-          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_external_libselinux aosp/external/libselinux
-          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_external_openssl   aosp/external/openssl
+
+          # clone DEST URL@REF [URL@REF ...]  -> uses the first source that works
+          clone() {
+            dest="$1"; shift
+            for src in "$@"; do
+              url="${src%@*}"; ref="${src##*@}"
+              echo ">>> trying $url @ $ref"
+              if git clone --depth 1 --branch "$ref" "$url" "$dest"; then
+                echo ">>> OK: $dest from $url @ $ref"
+                return 0
+              fi
+              rm -rf "$dest"
+            done
+            echo "!!! FAILED to fetch $dest from any source"
+            return 1
+          }
+
+          A=https://github.com/aosp-mirror
+          L=https://github.com/LineageOS
+
+          clone aosp/system/core \
+            $A/platform_system_core@android-4.4.4_r1 \
+            $L/android_system_core@cm-11.0
+
+          clone aosp/system/extras \
+            $A/platform_system_extras@android-4.4.4_r1 \
+            $L/android_system_extras@cm-11.0
+
+          clone aosp/external/zlib \
+            $A/platform_external_zlib@android-4.4.4_r1 \
+            $L/android_external_zlib@cm-11.0
+
+          clone aosp/external/libselinux \
+            $A/platform_external_libselinux@android-4.4.4_r1 \
+            $L/android_external_libselinux@cm-11.0
+
+          clone aosp/external/openssl \
+            $A/platform_external_openssl@android-4.4.4_r1 \
+            $L/android_external_openssl@cm-11.0
+
           # replace stock fastboot with the vivo-modified one
           rm -rf aosp/system/core/fastboot
           mkdir aosp/system/core/fastboot
