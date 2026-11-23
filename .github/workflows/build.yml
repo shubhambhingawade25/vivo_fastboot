@@ -79,7 +79,7 @@ jobs:
           # TOOLCHAIN= makes the makefile use the runner's gcc instead of /opt/poky.
           # Old 2014 C code needs relaxed flags on modern gcc.
           make -k TOOLCHAIN= \
-               CFLAGS="-O2 -g -w -std=gnu89 -fcommon" \
+               CFLAGS="-O2 -g -w -std=gnu89 -fcommon -include sys/sysmacros.h" \
                LIBS="-lpthread"
           file fastboot
           ./fastboot --help 2>&1 | head -20 || true
