@@ -1,0 +1,54 @@
+name: Build vivo_fastboot
+
+on:
+  workflow_dispatch:
+  push:
+
+env:
+  AOSP_TAG: android-4.4.4_r1
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout vivo_fastboot sources
+        uses: actions/checkout@v4
+        with:
+          path: vivo_src
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Fetch AOSP 4.4 sources (layout the makefile expects)
+        run: |
+          mkdir -p aosp/system aosp/external
+          M=https://github.com/aosp-mirror
+          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_system_core        aosp/system/core
+          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_system_extras      aosp/system/extras
+          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_external_zlib      aosp/external/zlib
+          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_external_libselinux aosp/external/libselinux
+          git clone --depth 1 --branch "$AOSP_TAG" $M/platform_external_openssl   aosp/external/openssl
+          # replace stock fastboot with the vivo-modified one
+          rm -rf aosp/system/core/fastboot
+          mkdir aosp/system/core/fastboot
+          cp -r vivo_src/. aosp/system/core/fastboot/
+          rm -rf aosp/system/core/fastboot/.git
+
+      - name: Compile
+        working-directory: aosp/system/core/fastboot
+        run: |
+          # TOOLCHAIN= makes the makefile use the runner's gcc instead of /opt/poky.
+          # Old 2014 C code needs relaxed flags on modern gcc.
+          make TOOLCHAIN= \
+               CFLAGS="-O2 -g -w -std=gnu89 -fcommon" \
+               LIBS="-lpthread"
+          file fastboot
+          ./fastboot --help 2>&1 | head -20 || true
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: vivo-fastboot-linux-x86_64
+          path: aosp/system/core/fastboot/fastboot
