@@ -183,6 +183,8 @@ jobs:
         run: |
           TAG_NAME="v1.0-win-${{ github.run_number }}"
           gh release create "$TAG_NAME" dist/vivo-fastboot-windows.zip \
+            --repo "${{ github.repository }}" \
+            --target master \
             --title "vivo_fastboot for Windows ($TAG_NAME)" \
             --notes "Pre-built native Windows (32-bit x86) fastboot.exe with vivo_bsp and bbk command support. Includes required AdbWinApi.dll and AdbWinUsbApi.dll." \
             --latest
