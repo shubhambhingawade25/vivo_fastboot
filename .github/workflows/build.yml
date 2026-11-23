@@ -64,6 +64,9 @@ jobs:
             $A/platform_external_openssl@android-4.4.4_r1 \
             $L/android_external_openssl@cm-11.0
 
+          # modern glibc already declares gettid(); rename libselinux's private copy
+          sed -i 's/\bgettid\b/selinux_gettid/g' aosp/external/libselinux/src/procattr.c
+
           # replace stock fastboot with the vivo-modified one
           rm -rf aosp/system/core/fastboot
           mkdir aosp/system/core/fastboot
@@ -75,7 +78,7 @@ jobs:
         run: |
           # TOOLCHAIN= makes the makefile use the runner's gcc instead of /opt/poky.
           # Old 2014 C code needs relaxed flags on modern gcc.
-          make TOOLCHAIN= \
+          make -k TOOLCHAIN= \
                CFLAGS="-O2 -g -w -std=gnu89 -fcommon" \
                LIBS="-lpthread"
           file fastboot
