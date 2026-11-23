@@ -1,0 +1,188 @@
+name: Build vivo_fastboot for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-windows.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout vivo_fastboot sources
+        uses: actions/checkout@v4
+        with:
+          path: vivo_src
+
+      - name: Install MinGW cross-compiler and build utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-i686 binutils-mingw-w64 mingw-w64-tools wget unzip zip
+
+      - name: Fetch Google official Windows platform-tools (for AdbWinApi.dll)
+        run: |
+          mkdir -p win_deps
+          cd win_deps
+          wget -q https://dl.google.com/android/repository/platform-tools-latest-windows.zip
+          unzip -q platform-tools-latest-windows.zip platform-tools/AdbWinApi.dll platform-tools/AdbWinUsbApi.dll
+          
+          # Generate 32-bit MinGW import library from official AdbWinApi.dll
+          gendef platform-tools/AdbWinApi.dll
+          i686-w64-mingw32-dlltool -d AdbWinApi.def -l libAdbWinApi.a -D AdbWinApi.dll
+
+      - name: Fetch AOSP 4.4 sources
+        run: |
+          mkdir -p aosp/system aosp/external aosp/development/host/windows/usb/api
+
+          clone() {
+            dest="$1"; shift
+            for src in "$@"; do
+              url="${src%@*}"; ref="${src#*@}"
+              echo ">>> trying $url @ $ref"
+              if git clone --depth 1 --branch "$ref" "$url" "$dest"; then
+                echo ">>> OK: $dest from $url @ $ref"
+                return 0
+              fi
+              rm -rf "$dest"
+            done
+            echo "!!! FAILED to fetch $dest from any source"
+            return 1
+          }
+
+          A=https://github.com/aosp-mirror
+          L=https://github.com/LineageOS
+
+          clone aosp/system/core \
+            $A/platform_system_core@android-4.4.4_r1 \
+            $L/android_system_core@cm-11.0
+
+          clone aosp/system/extras \
+            $A/platform_system_extras@android-4.4.4_r1 \
+            $L/android_system_extras@cm-11.0
+
+          clone aosp/external/zlib \
+            $A/platform_external_zlib@android-4.4.4_r1 \
+            $L/android_external_zlib@cm-11.0
+
+          # Fetch adb_api.h from AOSP development repository
+          wget -q -O aosp/development/host/windows/usb/api/adb_api.h https://raw.githubusercontent.com/aosp-mirror/platform_development/android-4.4.4_r1/host/windows/usb/api/adb_api.h
+
+          # Replace stock fastboot with vivo-modified fastboot
+          rm -rf aosp/system/core/fastboot
+          mkdir -p aosp/system/core/fastboot
+          cp -r vivo_src/. aosp/system/core/fastboot/
+          rm -rf aosp/system/core/fastboot/.git
+
+      - name: Compile fastboot.exe
+        working-directory: aosp/system/core/fastboot
+        run: |
+          # Copy import library locally
+          cp ../../../../win_deps/libAdbWinApi.a .
+
+          # Locate DDK headers for usb100.h
+          DDK_DIR=$(find /usr -name usb100.h 2>/dev/null | head -n 1 | xargs dirname)
+          echo "Found DDK dir: $DDK_DIR"
+
+          SRCS="
+            protocol.c
+            engine.c
+            bootimg.c
+            fastboot.c
+            usb_windows.c
+            util_windows.c
+            ../../../external/zlib/src/adler32.c
+            ../../../external/zlib/src/compress.c
+            ../../../external/zlib/src/crc32.c
+            ../../../external/zlib/src/deflate.c
+            ../../../external/zlib/src/gzclose.c
+            ../../../external/zlib/src/gzlib.c
+            ../../../external/zlib/src/gzread.c
+            ../../../external/zlib/src/gzwrite.c
+            ../../../external/zlib/src/infback.c
+            ../../../external/zlib/src/inflate.c
+            ../../../external/zlib/src/inftrees.c
+            ../../../external/zlib/src/inffast.c
+            ../../../external/zlib/src/trees.c
+            ../../../external/zlib/src/uncompr.c
+            ../../../external/zlib/src/zutil.c
+            ../../extras/ext4_utils/make_ext4fs.c
+            ../../extras/ext4_utils/ext4fixup.c
+            ../../extras/ext4_utils/ext4_utils.c
+            ../../extras/ext4_utils/allocate.c
+            ../../extras/ext4_utils/contents.c
+            ../../extras/ext4_utils/extent.c
+            ../../extras/ext4_utils/indirect.c
+            ../../extras/ext4_utils/uuid.c
+            ../../extras/ext4_utils/sha1.c
+            ../../extras/ext4_utils/wipe.c
+            ../../extras/ext4_utils/crc16.c
+            ../libsparse/backed_block.c
+            ../libsparse/output_file.c
+            ../libsparse/sparse.c
+            ../libsparse/sparse_crc32.c
+            ../libsparse/sparse_err.c
+            ../libsparse/sparse_read.c
+            ../libcutils/load_file.c
+            ../libzipfile/centraldir.c
+            ../libzipfile/zipfile.c
+          "
+
+          INCLUDES="
+            -I.
+            -I../include
+            -I../mkbootimg
+            -I../libsparse/include
+            -I../../extras/ext4_utils
+            -I../../../external/zlib
+            -I../../../development/host/windows/usb/api
+            -I$DDK_DIR
+          "
+
+          DEFINES="
+            -DHOST=1
+            -DADB_HOST=1
+            -D_WIN32=1
+            -DUSE_MINGW=1
+            -D_GNU_SOURCE
+            -D_XOPEN_SOURCE
+            -D__STDC_FORMAT_MACROS
+          "
+
+          FLAGS="-O2 -g -w -std=gnu89 -fcommon"
+
+          echo "Compiling with i686-w64-mingw32-gcc..."
+          i686-w64-mingw32-gcc $FLAGS $DEFINES $INCLUDES $SRCS \
+            -L. -lAdbWinApi -lws2_32 \
+            -o fastboot.exe
+
+          file fastboot.exe
+          mkdir -p ../../../../dist
+          cp fastboot.exe ../../../../dist/
+          cp ../../../../win_deps/platform-tools/AdbWinApi.dll ../../../../dist/
+          cp ../../../../win_deps/platform-tools/AdbWinUsbApi.dll ../../../../dist/
+
+      - name: Package Windows ZIP
+        working-directory: dist
+        run: |
+          zip -j vivo-fastboot-windows.zip fastboot.exe AdbWinApi.dll AdbWinUsbApi.dll
+          ls -la
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vivo-fastboot-windows
+          path: dist/vivo-fastboot-windows.zip
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="v1.0-win-${{ github.run_number }}"
+          gh release create "$TAG_NAME" dist/vivo-fastboot-windows.zip \
+            --title "vivo_fastboot for Windows ($TAG_NAME)" \
+            --notes "Pre-built native Windows (32-bit x86) fastboot.exe with vivo_bsp and bbk command support. Includes required AdbWinApi.dll and AdbWinUsbApi.dll." \
+            --latest
